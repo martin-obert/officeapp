@@ -31,7 +31,7 @@ namespace OfficeApp.ConfigSections
 
         protected override object GetElementKey(ConfigurationElement element)
         {
-            return ((ExcelFormatterElement) element).Keyword;
+            return ((ExcelFormatterElement) element).Id;
         }
 
         protected override string ElementName => "formatter";

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Configuration;
 using System.Diagnostics;
 using System.IO;
@@ -15,50 +16,69 @@ namespace OfficeApp
     {
         static void Main(string[] args)
         {
-            var filepath = ConfigurationManager.AppSettings["filepath"];
-            Console.WriteLine("Starting headless application mode.\nLooking for file: \"" + filepath + "\"");
+            var filename = ConfigurationManager.AppSettings["filename"];
+            var directory = ConfigurationManager.AppSettings["directory"];
 
-            if (!string.IsNullOrEmpty(filepath) && File.Exists(filepath))
-                Console.WriteLine("File - FOUND");
-            else
-            {
-                Console.WriteLine("File - NOT FOUND, please add or update filepath in App.config -> appSettings -> filepath");
-                return;
-            }
+            Console.WriteLine("Starting headless application mode.\nLooking for files: \"" + filename + "\"");
+
+            if (!Directory.Exists(directory))
+                Console.WriteLine("Non existing directory: " + directory);
+
+            var files = Directory.GetFiles(directory);
 
             if (!(ConfigurationManager.GetSection("ExcelFormattersSection") is ExcelFormattersSection section))
                 throw new NullReferenceException("Configuration section for formatting was not found.");
 
             Console.WriteLine("Reading formatters configuration:");
 
-            var formatters = section.Formatters.Cast<ExcelFormatterElement>().Select((item, index) => new { index = index + 1, item });
+            var formatters = section.Formatters.Cast<ExcelFormatterElement>();
 
             var regexPattern = new StringBuilder();
 
             foreach (var formatter in formatters)
             {
-                Console.WriteLine("Keyword: \"" + formatter.item.Keyword + "\" will be replaced with: \"" + formatter.item.Replacement + "\"");
+                if (string.IsNullOrEmpty(formatter.Keyword) || string.IsNullOrEmpty(formatter.Replacement))
+                    continue;
+
+                Console.WriteLine("Keyword: \"" + formatter.Keyword + "\" will be replaced with: \"" +
+                                  formatter.Replacement + "\"");
 
                 if (regexPattern.Length > 0)
                 {
                     regexPattern.Append("|");
                 }
 
-                regexPattern.AppendFormat("(?<{0}>{1})", formatter.index, formatter.item.Keyword);
+                regexPattern.AppendFormat("(?<{0}>{1})", formatter.Id, formatter.Keyword);
             }
-
+            Console.Write("Regex: " + regexPattern);
             var regex = new Regex(regexPattern.ToString());
 
             var cellsRange = ConfigurationManager.AppSettings["range"];
 
             if (string.IsNullOrEmpty(cellsRange))
             {
-                Console.WriteLine("No range was specified, please add or update value in App.config -> appSettings -> range");
+                Console.WriteLine(
+                    "No range was specified, please add or update value in App.config -> appSettings -> range");
                 return;
+            }
+
+            foreach (var file in files)
+            {
+                if (!Regex.IsMatch(file, filename) && !file.Contains("~"))
+                    continue;
+                ProcessFile(file, cellsRange, regex, formatters);
             }
 
             Console.WriteLine("Cells range is set to: " + cellsRange);
 
+
+        }
+
+        private static Regex _numberRegex = new Regex(@"(?<id>\d{3}$)");
+
+
+        private static void ProcessFile(string filepath, string cellsRange, Regex regex, IEnumerable<ExcelFormatterElement> formatters)
+        {
             var excel = new Application();
             Workbooks wkbks = null;
 
@@ -66,18 +86,26 @@ namespace OfficeApp
 
             Workbook wkbk = null;
             wkbk = wkbks.Open(Path.Combine(Directory.GetCurrentDirectory(), filepath));
-            //wkbk.Activate();
 
             excel.Visible = false;
+
             excel.DisplayAlerts = false;
+
             try
             {
-
                 var wb = excel.ActiveWorkbook;
 
                 Console.WriteLine(wb.Worksheets.Count);
 
                 var ws = wb.Worksheets[1] as Worksheet;
+
+                foreach (var excelFormatterElement in formatters.Where(x => !string.IsNullOrEmpty(x.Range)))
+                {
+                    if (!string.IsNullOrEmpty(excelFormatterElement.NumberFormat))
+                        ws.Range[excelFormatterElement.Range].EntireColumn.NumberFormat = excelFormatterElement.NumberFormat;
+                }
+
+
 
                 var range = ws.Range[cellsRange];
 
@@ -108,12 +136,11 @@ namespace OfficeApp
                         Console.WriteLine("Processing cell: COL " + currentRange.Column + " ROW " + currentRange.Row);
 
 
-
                         string value = currentRange.Value.ToString();
 
                         value = regex.Replace(value, match =>
                         {
-                            return formatters.First(x => x.item.Keyword == match.Value).item.Replacement;
+                            return formatters.First(x => x.Keyword == match.Value).Replacement;
                         });
 
                         Console.WriteLine("Replacing: " + value + " -> " + currentRange.Value.ToString());
@@ -123,13 +150,23 @@ namespace OfficeApp
                     }
                 }
 
-                Console.WriteLine("Saving to: " + filepath);
-                wb.SaveAs(filepath, Microsoft.Office.Interop.Excel.XlFileFormat.xlWorkbookDefault, Type.Missing, Type.Missing,
+
+                var newPath = Path.GetDirectoryName(filepath);
+                var fileId = FindMaxIdFromFolder(newPath, Path.GetFileName(filepath));
+
+                var newFileId = fileId + 1;
+                var sanitizedFilename = Path.GetFileNameWithoutExtension(filepath).Replace(fileId.ToString("000"), string.Empty);
+                var newFile = Path.Combine(newPath,
+                    $"{sanitizedFilename}{newFileId:000}.xls");
+                wb.SaveAs(newFile, Microsoft.Office.Interop.Excel.XlFileFormat.xlWorkbookDefault, Type.Missing,
+                    Type.Missing,
                     false, false, Microsoft.Office.Interop.Excel.XlSaveAsAccessMode.xlNoChange,
                     Type.Missing, Type.Missing, Type.Missing, Type.Missing, Type.Missing);
                 wb.Close();
 
                 Marshal.ReleaseComObject(wb);
+                Marshal.ReleaseComObject(wkbks);
+                Console.WriteLine("Saving to: " + newFile);
 
                 Console.WriteLine("Finished succesfully");
             }
@@ -137,7 +174,8 @@ namespace OfficeApp
             {
                 Console.WriteLine(e.ToString());
                 Trace.WriteLine(e.ToString());
-                Console.WriteLine("Finished with errors. Please read application.log at " + Directory.GetCurrentDirectory());
+                Console.WriteLine("Finished with errors. Please read application.log at " +
+                                  Directory.GetCurrentDirectory());
             }
             finally
             {
@@ -147,6 +185,61 @@ namespace OfficeApp
 
                 excel.Quit();
             }
+        }
+
+        private static void SaveMaxId(int value)
+        {
+            var conf = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None);
+            conf.AppSettings.Settings["maxId"].Value = value.ToString("000");
+        }
+
+        private static int LoadMaxId()
+        {
+            int.TryParse(ConfigurationManager.AppSettings["maxId"], out var maxId);
+            return maxId;
+        }
+        private static int FindMaxIdFromFolder(string searchDirectory, string filenameRaw)
+        {
+            if (string.IsNullOrEmpty(searchDirectory))
+            {
+                Console.WriteLine("Directory with excel files not provided.");
+                return 0;
+            }
+
+            if (!Directory.Exists(searchDirectory))
+            {
+                Console.WriteLine("Directory with excel files was not found.");
+                return 0;
+            }
+
+            var files = Directory.GetFiles(searchDirectory);
+
+            var maxId = 0;
+
+
+            foreach (var file in files)
+            {
+                if (filenameRaw != null && !Regex.IsMatch(file, filenameRaw))
+                    continue;
+
+                var regex = _numberRegex.Match(Path.GetFileNameWithoutExtension(file));
+
+                if (regex.Length > 0 && regex.Groups["id"] != null)
+                {
+                    var idRaw = regex.Groups["id"].Value;
+
+                    if (int.TryParse(idRaw, out var temp))
+                    {
+                        if (temp > maxId)
+                        {
+                            maxId = temp;
+                        }
+                    }
+                }
+            }
+
+            return maxId;
+
         }
     }
 }
