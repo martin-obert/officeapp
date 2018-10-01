@@ -24,7 +24,7 @@ namespace OfficeApp
             if (!Directory.Exists(directory))
                 Console.WriteLine("Non existing directory: " + directory);
 
-            var files = Directory.GetFiles(directory);
+           
 
             if (!(ConfigurationManager.GetSection("ExcelFormattersSection") is ExcelFormattersSection section))
                 throw new NullReferenceException("Configuration section for formatting was not found.");
@@ -48,7 +48,7 @@ namespace OfficeApp
                     regexPattern.Append("|");
                 }
 
-                regexPattern.AppendFormat("(?<{0}>{1})", formatter.Id, formatter.Keyword);
+                regexPattern.AppendFormat("(?<g{0}>{1})", formatter.Id, formatter.Keyword);
             }
             Console.Write("Regex: " + regexPattern);
             var regex = new Regex(regexPattern.ToString());
@@ -62,12 +62,9 @@ namespace OfficeApp
                 return;
             }
 
-            foreach (var file in files)
-            {
-                if (!Regex.IsMatch(file, filename) && !file.Contains("~"))
-                    continue;
-                ProcessFile(file, cellsRange, regex, formatters);
-            }
+            var maxFileId = FindMaxIdFromFolder(directory, filename);
+
+                ProcessFile(Path.Combine(directory,$"{filename}{maxFileId:000}.xls"), cellsRange, regex, formatters);
 
             Console.WriteLine("Cells range is set to: " + cellsRange);
 
@@ -151,22 +148,17 @@ namespace OfficeApp
                 }
 
 
-                var newPath = Path.GetDirectoryName(filepath);
-                var fileId = FindMaxIdFromFolder(newPath, Path.GetFileName(filepath));
-
-                var newFileId = fileId + 1;
-                var sanitizedFilename = Path.GetFileNameWithoutExtension(filepath).Replace(fileId.ToString("000"), string.Empty);
-                var newFile = Path.Combine(newPath,
-                    $"{sanitizedFilename}{newFileId:000}.xls");
-                wb.SaveAs(newFile, Microsoft.Office.Interop.Excel.XlFileFormat.xlWorkbookDefault, Type.Missing,
-                    Type.Missing,
-                    false, false, Microsoft.Office.Interop.Excel.XlSaveAsAccessMode.xlNoChange,
-                    Type.Missing, Type.Missing, Type.Missing, Type.Missing, Type.Missing);
+                wb.Save();
+                //wb.Save(filepath, Microsoft.Office.Interop.Excel.XlFileFormat.xlWorkbookDefault, Type.Missing,
+                //    Type.Missing,
+                //    false, false, Microsoft.Office.Interop.Excel.XlSaveAsAccessMode.xlNoChange,
+                //    Type.Missing, Type.Missing, Type.Missing, Type.Missing, Type.Missing);
                 wb.Close();
 
                 Marshal.ReleaseComObject(wb);
+                Marshal.ReleaseComObject(wkbk);
                 Marshal.ReleaseComObject(wkbks);
-                Console.WriteLine("Saving to: " + newFile);
+                Console.WriteLine("Saving to: " + filepath);
 
                 Console.WriteLine("Finished succesfully");
             }
@@ -179,11 +171,26 @@ namespace OfficeApp
             }
             finally
             {
+                excel.Quit();
+
                 GC.Collect();
 
                 GC.WaitForPendingFinalizers();
+                KillExcel();
 
-                excel.Quit();
+
+            }
+        }
+
+        private static void KillExcel()
+        {
+            System.Diagnostics.Process[] PROC = System.Diagnostics.Process.GetProcessesByName("EXCEL");
+            foreach (System.Diagnostics.Process PK in PROC)
+            {
+                if (PK.MainWindowTitle.Length == 0)
+                {
+                    PK.Kill();
+                }
             }
         }
 
