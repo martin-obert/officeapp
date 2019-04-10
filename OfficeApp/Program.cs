@@ -24,7 +24,7 @@ namespace OfficeApp
             if (!Directory.Exists(directory))
                 Console.WriteLine("Non existing directory: " + directory);
 
-           
+
 
             if (!(ConfigurationManager.GetSection("ExcelFormattersSection") is ExcelFormattersSection section))
                 throw new NullReferenceException("Configuration section for formatting was not found.");
@@ -64,7 +64,7 @@ namespace OfficeApp
 
             var maxFileId = FindMaxIdFromFolder(directory, filename);
 
-                ProcessFile(Path.Combine(directory,$"{filename}{maxFileId:000}.xls"), cellsRange, regex, formatters);
+            ProcessFile(Path.Combine(directory, $"{filename}{maxFileId:000}"), cellsRange, regex, formatters);
 
             Console.WriteLine("Cells range is set to: " + cellsRange);
 
@@ -82,7 +82,7 @@ namespace OfficeApp
             wkbks = excel.Workbooks;
 
             Workbook wkbk = null;
-            wkbk = wkbks.Open(Path.Combine(Directory.GetCurrentDirectory(), filepath));
+            wkbk = wkbks.Open(Path.Combine(Directory.GetCurrentDirectory(), filepath + ".xls"));
 
             excel.Visible = false;
 
@@ -127,8 +127,17 @@ namespace OfficeApp
 
                         if (matches == null || matches.Count == 0)
                         {
+                            DateTime date;
+                            TimeSpan timespan;
+                            if (DateTime.TryParse(val.ToString(), out date) && !TimeSpan.TryParse(val.ToString(), out timespan) && date > new DateTime(2002))
+                            {
+                                currentRange.Value = date.ToString("dd.MM.yyyy");
+                            }
+
                             continue;
                         }
+
+                        
 
                         Console.WriteLine("Processing cell: COL " + currentRange.Column + " ROW " + currentRange.Row);
 
@@ -141,6 +150,7 @@ namespace OfficeApp
                         });
 
                         Console.WriteLine("Replacing: " + value + " -> " + currentRange.Value.ToString());
+
 
                         currentRange.Value = value;
 
@@ -158,6 +168,12 @@ namespace OfficeApp
                 Marshal.ReleaseComObject(wb);
                 Marshal.ReleaseComObject(wkbk);
                 Marshal.ReleaseComObject(wkbks);
+                var newFilename = Path.Combine(Directory.GetCurrentDirectory(), filepath + ".xlsx");
+                if(File.Exists(newFilename))
+                    File.Delete(newFilename);
+                File.Move(Path.Combine(Directory.GetCurrentDirectory(), filepath + ".xls"), newFilename);
+
+
                 Console.WriteLine("Saving to: " + filepath);
 
                 Console.WriteLine("Finished succesfully");
